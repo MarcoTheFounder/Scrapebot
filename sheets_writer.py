@@ -12,16 +12,13 @@ HOW IT WORKS
 import gspread
 from google.oauth2.service_account import Credentials
 
-# The exact Sheet ID from your Google Sheets URL
 SHEET_ID = "1gSHiQUEK3O2PNAtccHxzOvqUhfae5OoyNBqBTsKGVlI"
 
-# Which Google APIs we need access to
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Column headers — matches what SyncTalents actually needs
 HEADERS = [
     "Company Name",
     "Company ID",
@@ -31,9 +28,11 @@ HEADERS = [
     "# of Job Postings",
     "Sample Positions",
     "Company URL",
-    "Email",         # filled in later by enrichers
-    "Phone",         # filled in later by enrichers
-    "Email Source",  # website / hunter / snov — for tracking what works
+    "Email",
+    "Contact Name",
+    "Contact Role",
+    "Phone",
+    "Email Source",
 ]
 
 
@@ -49,18 +48,11 @@ def write_leads(companies):
     """
     Write deduplicated company list to Google Sheets.
     Clears existing data first so re-runs don't stack up duplicates.
-
-    companies: list of dicts from dedupe_by_company() in philjobnet.py
     """
     sheet = get_sheet()
-
-    # Clear everything and start fresh
     sheet.clear()
-
-    # Write header row
     sheet.append_row(HEADERS)
 
-    # Write one row per company
     rows = []
     for c in companies:
         rows.append([
@@ -72,9 +64,11 @@ def write_leads(companies):
             c.get("job_count", 0),
             c.get("sample_positions", ""),
             f'=HYPERLINK("{c.get("company_url", "")}","View Profile")' if c.get("company_url") else "",
-            c.get("email", ""),        # blank for now — enrichers fill this
-            "'" + c.get("phone", "") if c.get("phone") else "",      # blank for now — enrichers fill this
-            c.get("email_source", ""), # blank for now — enrichers fill this
+            c.get("email", ""),
+            c.get("contact_name", ""),
+            c.get("contact_role", ""),
+            "'" + c.get("phone", "") if c.get("phone") else "",
+            c.get("email_source", ""),
         ])
 
     if rows:
@@ -83,7 +77,6 @@ def write_leads(companies):
     print(f"Written {len(rows)} companies to Google Sheets.")
 
 
-# Quick test — run this file directly to check the connection works
 if __name__ == "__main__":
     print("Testing Google Sheets connection...")
     sheet = get_sheet()

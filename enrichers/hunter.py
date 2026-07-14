@@ -113,9 +113,15 @@ def enrich(company):
         email = _pick_best_email(emails)
 
         if email:
-            company["email"] = email
-            company["email_source"] = "hunter"
-            print(f"  [hunter] Found: {email}")
+    company["email"] = email
+    company["email_source"] = "hunter"
+    # Extract contact name and role if Hunter returned them
+    matched = next((e for e in emails if e.get("value") == email), {})
+    company["contact_name"] = (
+        f"{matched.get('first_name', '')} {matched.get('last_name', '')}".strip()
+    )
+    company["contact_role"] = matched.get("position", "") or matched.get("department", "")
+    print(f"  [hunter] Found: {email} ({company['contact_role'] or 'role unknown'})")
         else:
             print(f"  [hunter] No emails found for {domain} — leaving blank.")
 
