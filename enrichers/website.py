@@ -4,35 +4,40 @@ enrichers/website.py — Step 1 of the enrichment chain.
 WHAT IT DOES
 ------------
 1. Takes a company name + city
-2. Searches DuckDuckGo for their website
+2. Searches Google (via Serper API) for their website
 3. Scrapes the website's /contact, /about, /team pages
 4. Extracts emails and Philippine phone numbers
+
+WHY SERPER INSTEAD OF DUCKDUCKGO
+--------------------------------
+DuckDuckGo blocks headless servers (like the Raspberry Pi) by IP.
+Serper is an API — it works from any server, returns clean JSON,
+and has a free tier of 2,500 searches/month. Same job as DDG
+(find the company website), just through a reliable channel.
 
 HARD-BLANK RULE
 ---------------
 If nothing is found, returns empty strings. Never guesses.
 A blank result is correct behavior, not a failure.
-
-PH PHONE FORMAT
----------------
-Matches: +63-917-123-4567, 09171234567, (02) 8123-4567
-Does NOT match: random number strings, foreign numbers
 """
 
+import os
 import re
 import time
 
 import requests
 from bs4 import BeautifulSoup
-from ddgs import DDGS
+from dotenv import load_dotenv
 
 from enrichers.match import is_plausible_match
 
-# Pages most likely to have contact info — checked in this order
+load_dotenv()
+
+SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
+SERPER_URL = "https://google.serper.dev/search"
+
 CONTACT_PATHS = ["/contact", "/contact-us", "/about", "/about-us", "/team", "/people"]
 
-# Philippine mobile: 09XX or +639XX
-# Philippine landline: (02) or +632 followed by 7-8 digits
 PH_PHONE_RE = re.compile(
     r"(?:\+63|0)(?:9\d{9}|2[\s\-]\d{4}[\s\-]\d{4}|[2-9]\d{8,9})"
 )
@@ -49,25 +54,39 @@ HEADERS = {
 
 def find_website(company_name, city=""):
     """
-    Search DuckDuckGo for the company's official website.
+    Search Google (via Serper) for the company's official website.
     Returns a URL string or "" if nothing credible found.
 
-    Uses is_plausible_match() instead of a static blacklist — checks
-    whether each candidate domain's name actually resembles the company
-    name, rather than maintaining a growing list of known-bad sites.
+    Uses is_plausible_match() to reject results whose domain doesn't
+    resemble the company name (directories, marketplaces, etc.).
     """
+    if not SERPER_API_KEY:
+        print("  [!] SERPER_API_KEY not set in .env — skipping website search.")
+        return ""
+
     query = f'"{company_name}" {city} official website Philippines'.strip()
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=5))
-        for r in results:
-            url = r.get("href", "")
+        r = requests.post(
+            SERPER_URL,
+            headers={
+                "X-API-KEY": SERPER_API_KEY,
+                "Content-Type": "application/json",
+            },
+            json={"q": query, "gl": "ph", "num": 5},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            print(f"  [!] Serper returned {r.status_code} for {company_name}")
+            return ""
+
+        results = r.json().get("organic", [])
+        for result in results:
+            url = result.get("link", "")
             if url and is_plausible_match(company_name, url):
-                # Return just the base domain
                 match = re.match(r"(https?://[^/]+)", url)
                 return match.group(1) if match else url
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [!] Serper search failed for {company_name}: {e}")
     return ""
 
 
@@ -113,7 +132,6 @@ def scrape_website(base_url):
 
         emails, phones = _extract_contacts(soup)
 
-        # Prefer non-generic emails (skip noreply@, support@ as first choice)
         good_emails = [e for e in emails if not any(
             e.startswith(p) for p in ("noreply", "no-reply", "donotreply")
         )]
@@ -124,7 +142,7 @@ def scrape_website(base_url):
         if email or phone:
             return email, phone
 
-        time.sleep(0.5)  # brief pause between page attempts
+        time.sleep(0.5)
 
     return "", ""
 
@@ -132,14 +150,9 @@ def scrape_website(base_url):
 def enrich(company):
     """
     Main entry point called by pipeline.py.
-
-    Input:  company dict (must have 'company_name', optionally 'company_address')
-    Output: same dict with 'website', 'email', 'phone', 'email_source' added
-
     Always returns the dict — blanks if nothing found (hard-blank rule).
     """
     name = company.get("company_name", "")
-    # Extract city from address — first segment before the comma
     address = company.get("company_address", "")
     city = address.split(",")[0].strip() if address else ""
 
@@ -159,13 +172,12 @@ def enrich(company):
     return company
 
 
-# Standalone test
 if __name__ == "__main__":
     test = {
         "company_name": "Jollibee Foods Corporation",
         "company_address": "Pasig City, Metro Manila",
     }
-    print("Testing website enricher...")
+    print("Testing website enricher (Serper)...")
     result = enrich(test)
     print(f"Website:  {result['website']}")
     print(f"Email:    {result['email'] or '(blank — hard-blank rule)'}")
